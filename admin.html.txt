@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>پنل مدیریت</title>
+    <style>
+        body { font-family: Arial; text-align: center; background: #f4f4f4; }
+        .container { max-width: 600px; margin: 20px auto; background: white; padding: 20px; border-radius: 8px; }
+        h1 { color: #d4a017; font-size: 28px; margin-bottom: 20px; }
+        button { padding: 12px 24px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .section { margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>آبشده و طلای شیبانی</h1>
+        <h2>پنل مدیریت</h2>
+        <div class="section">
+            <button onclick="fetchPrices()">به‌روزرسانی قیمت‌ها</button>
+            <button onclick="window.location='/inventory'">نمایش موجودی</button>
+            <button onclick="fetchProfitLoss()">محاسبه سود/زیان</button>
+            <button onclick="window.location='/add_user'">اضافه کردن کاربر</button>
+            <button onclick="window.location='/requests'">مدیریت درخواست‌ها</button>
+            <button onclick="window.location='/manage_items'">مدیریت کالاها</button>
+            <button onclick="window.location='/logout'">خروج</button>
+        </div>
+        <div class="section">
+            <h3>معاملات</h3>
+            {% for item, label in items.items() %}
+                {% if active_items[item] %}
+                    <button onclick="window.location='/trade/trade/buy/{{ item }}'">خرید {{ label }}</button>
+                    <button onclick="window.location='/trade/trade/sell/{{ item }}'">فروش {{ label }}</button><br>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    <script>
+        function fetchPrices() {
+            fetch('/prices').then(res => res.json()).then(data => {
+                if (data.success) {
+                    alert(Object.entries(data.prices).map(([k, v]) => `${k}: ${v} تومان`).join('\n'));
+                } else {
+                    alert('خطا در دریافت قیمت‌ها!');
+                }
+            });
+        }
+        function fetchProfitLoss() {
+            fetch('/profit_loss').then(res => res.json()).then(data => alert(`سود/زیان: ${data.profit_loss}`));
+        }
+    </script>
+</body>
+</html>

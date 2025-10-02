@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>موجودی</title>
+    <style>
+        body { font-family: Arial; text-align: center; background: #f4f4f4; }
+        table { width: 80%; margin: 20px auto; border-collapse: collapse; background: white; border-radius: 8px; }
+        th, td { border: 1px solid #ccc; padding: 10px; text-align: center; }
+        th { background: #007bff; color: white; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        canvas { max-width: 600px; margin: 20px auto; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h2>موجودی</h2>
+    {% for user, inv in inventory.items() %}
+        <h3>کاربر: {{ user }}</h3>
+        <table>
+            <tr><th>کالا</th><th>مقدار</th><th>میانگین خرید</th><th>ارزش فعلی</th></tr>
+            {% for item, data in inv.items() %}
+                <tr><td>{{ items[item] }}</td><td>{{ data[0]|round(2) }}</td><td>{{ data[1]|int }}</td><td>{{ data[2]|int }}</td></tr>
+            {% endfor %}
+        </table>
+        <h4>خریدهای تأییدشده</h4>
+        <table>
+            <tr><th>تاریخ</th><th>کالا</th><th>مقدار</th><th>قیمت</th><th>ارزش کل</th></tr>
+            {% for buy in buys[user] %}
+                <tr><td>{{ buy.date[:10] }}</td><td>{{ items[buy.item] }}</td><td>{{ buy.quantity|round(2) }}</td><td>{{ buy.price_per_unit|int }}</td><td>{{ buy.total_value|int }}</td></tr>
+            {% endfor %}
+        </table>
+    {% endfor %}
+    <canvas id="priceChart"></canvas>
+    <button onclick="window.location='/{{ 'admin' if session['user'] and manager.db.execute('SELECT role FROM users WHERE username = ?', (session['user'],)).fetchone()['role'] == 'admin' else 'customer' }}'">بازگشت</button>
+    <script>
+        fetch('/price_history')
+            .then(response => response.json())
+            .then(data => {
+                let ctx = document.getElementById('priceChart').getContext('2d');
+                new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: Object.keys(data).map(item => ({
+                            label: item,
+                            data: data[item].map(d => ({ x: d.date, y: d.price })),
+                            borderColor: '#' + Math.floor(Math.random()*16777215).toString(16),
+                            fill: false
+                        }))
+                    },
+                    options: { scales: { x: { type: 'time', time: { unit: 'day' } } } }
+                });
+            });
+    </script>
+</body>
+</html>

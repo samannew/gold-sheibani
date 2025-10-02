@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>مدیریت کالاها</title>
+    <style>
+        body { font-family: Arial; text-align: center; background: #f4f4f4; }
+        .container { max-width: 400px; margin: 20px auto; background: white; padding: 20px; border-radius: 8px; }
+        h1 { color: #d4a017; font-size: 28px; margin-bottom: 20px; }
+        label { display: block; margin: 10px 0; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>آبشده و طلای شیبانی</h1>
+        <h2>مدیریت کالاها</h2>
+        {% for item, label in items.items() %}
+            <label><input type="checkbox" {{ 'checked' if active_items[item] else '' }} onchange="toggleItem('{{ item }}', this.checked)"> {{ label }}</label>
+        {% endfor %}
+        <button onclick="window.location='/admin'">بازگشت</button>
+    </div>
+    <script>
+        function toggleItem(item, active) {
+            fetch(`/toggle_item/${item}/${active ? 1 : 0}`)
+                .then(response => response.json())
+                .then(data => alert(data.success ? 'وضعیت به‌روزرسانی شد' : 'خطا!'));
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+!DOCTYPE html
+html lang=fa dir=rtl
+head
+    meta charset=UTF-8
+    titleپنل مشتریtitle
+    style
+        body { font-family Arial; text-align center; background #f4f4f4; }
+        .container { max-width 600px; margin 20px auto; background white; padding 20px; border-radius 8px; }
+        h1 { color #d4a017; font-size 28px; margin-bottom 20px; }
+        button { padding 12px 24px; margin 5px; background #007bff; color white; border none; border-radius 4px; cursor pointer; }
+        buttonhover { background #0056b3; }
+        .section { margin 20px 0; }
+    style
+head
+body
+    div class=container
+        h1آبشده و طلای شیبانیh1
+        h2پنل مشتریh2
+        div class=section
+            button onclick=window.location='inventory'نمایش موجودیbutton
+            button onclick=fetchProfitLoss()محاسبه سودزیانbutton
+            button onclick=window.location='logout'خروجbutton
+        div
+        div class=section
+            h3درخواست‌هاh3
+            {% for item, label in items.items() %}
+                {% if active_items[item] %}
+                    button onclick=window.location='traderequestbuy{{ item }}'درخواست خرید {{ label }}button
+                    button onclick=window.location='traderequestsell{{ item }}'درخواست فروش {{ label }}buttonbr
+                {% endif %}
+            {% endfor %}
+        div
+    div
+    script
+        function fetchProfitLoss() {
+            fetch('profit_loss').then(res = res.json()).then(data = alert(`سودزیان ${data.profit_loss}`));
+        }
+    script
+body
+html

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>ورود</title>
+    <style>
+        body { font-family: Arial; text-align: center; background: #f4f4f4; }
+        .form { max-width: 300px; margin: 50px auto; padding: 20px; border: 1px solid #ccc; background: white; border-radius: 8px; }
+        input { width: 100%; margin: 10px 0; padding: 10px; border-radius: 4px; border: 1px solid #ddd; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        p { color: red; }
+    </style>
+</head>
+<body>
+    <div class="form">
+        <h2>ورود</h2>
+        <form method="post">
+            <input type="text" name="username" placeholder="نام کاربری" required>
+            <input type="password" name="password" placeholder="رمز عبور" required>
+            <button type="submit">ورود</button>
+        </form>
+        {% if error %}<p>{{ error }}</p>{% endif %}
+    </div>
+</body>
+</html>

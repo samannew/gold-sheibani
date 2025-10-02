@@ -1,0 +1,285 @@
+import json
+import sqlite3
+import datetime
+import requests
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify
+
+app = Flask(__name__)
+app.secret_key = 'super-secret-key'
+
+class GoldTradeManager:
+    API_URL = 'https://api.tgju.org/v1/market/indicator'
+    PURITY_FACTOR = 0.75
+    ITEMS = {
+        'ab_shodeh': 'طلای آبشده', 'seke_tamam_86': 'سکه تمام ۸۶', 'seke_tamam_non86': 'سکه تمام غیره',
+        'nim_seke_86': 'نیم سکه ۸۶', 'nim_seke_non86': 'نیم سکه غیره', 'rob_seke_86': 'ربع سکه ۸۶', 'rob_seke_non86': 'ربع سکه غیره'
+    }
+
+    def __init__(self):
+        self.db = sqlite3.connect('/tmp/gold_trades.db', check_same_thread=False)
+        self.db.row_factory = sqlite3.Row
+        self.init_db()
+
+    def init_db(self):
+        cursor = self.db.cursor()
+        cursor.executescript('''
+            CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT);
+            CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, type TEXT, item TEXT, quantity REAL, price_per_unit REAL, total_value REAL, user TEXT);
+            CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, type TEXT, item TEXT, quantity REAL, price_per_unit REAL, total_value REAL, user TEXT, status TEXT);
+            CREATE TABLE IF NOT EXISTS prices (item TEXT, price REAL, date TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (item, date));
+            CREATE TABLE IF NOT EXISTS active_items (item TEXT PRIMARY KEY, active INTEGER);
+        ''')
+        cursor.execute("INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)", ('admin', 'admin123', 'admin'))
+        for item in self.ITEMS:
+            cursor.execute("INSERT OR IGNORE INTO active_items (item, active) VALUES (?, ?)", (item, 1))
+        self.db.commit()
+
+    def login(self, username: str, password: str) -> bool:
+        cursor = self.db.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
+        return bool(cursor.fetchone())
+
+    def fetch_current_prices(self) -> bool:
+        try:
+            response = requests.get(self.API_URL, timeout=5)
+            response.raise_for_status()
+            data = response.json().get('data', {})
+            prices = {
+                'ab_shodeh': float(data.get('gold_18', {}).get('p', '0').replace(',', '')) / self.PURITY_FACTOR,
+                'seke_tamam_86': float(data.get('sekeb', {}).get('p', '0').replace(',', '')),
+                'seke_tamam_non86': float(data.get('sekeb', {}).get('p', '0').replace(',', '')) * 0.98,
+                'nim_seke_86': float(data.get('nim', {}).get('p', '0').replace(',', '')),
+                'nim_seke_non86': float(data.get('nim', {}).get('p', '0').replace(',', '')) * 0.98,
+                'rob_seke_86': float(data.get('rob', {}).get('p', '0').replace(',', '')),
+                'rob_seke_non86': float(data.get('rob', {}).get('p', '0').replace(',', '')) * 0.98
+            }
+            cursor = self.db.cursor()
+            for item, price in prices.items():
+                cursor.execute("INSERT INTO prices (item, price) VALUES (?, ?)", (item, price))
+            self.db.commit()
+            return True
+        except requests.RequestException:
+            return False
+
+    def toggle_item(self, item: str, active: bool):
+        cursor = self.db.cursor()
+        cursor.execute("UPDATE active_items SET active = ? WHERE item = ?", (int(active), item))
+        self.db.commit()
+
+    def validate_input(self, trade_type: str, item: str, qty: float, price: float | None) -> bool:
+        cursor = self.db.cursor()
+        cursor.execute("SELECT active FROM active_items WHERE item = ?", (item,))
+        row = cursor.fetchone()
+        if not row or not row['active']:
+            return False
+        cursor.execute("SELECT price FROM prices WHERE item = ? ORDER BY date DESC LIMIT 1", (item,))
+        row = cursor.fetchone()
+        if not row or row['price'] == 0:
+            return False
+        return trade_type in ['buy', 'sell'] and qty > 0 and (price is None or price > 0)
+
+    def add_trade(self, trade_type: str, item: str, qty: float, price: float | None, user: str) -> bool:
+        if not self.validate_input(trade_type, item, qty, price):
+            return False
+        cursor = self.db.cursor()
+        cursor.execute("SELECT price FROM prices WHERE item = ? ORDER BY date DESC LIMIT 1", (item,))
+        price = price or cursor.fetchone()['price']
+        cursor.execute("INSERT INTO trades (date, type, item, quantity, price_per_unit, total_value, user) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                       (datetime.datetime.now().isoformat(), trade_type, item, qty, price, qty * price, user))
+        self.db.commit()
+        return True
+
+    def add_request(self, trade_type: str, item: str, qty: float, price: float | None, user: str) -> bool:
+        if not self.validate_input(trade_type, item, qty, price):
+            return False
+        cursor = self.db.cursor()
+        cursor.execute("SELECT price FROM prices WHERE item = ? ORDER BY date DESC LIMIT 1", (item,))
+        price = price or cursor.fetchone()['price']
+        cursor.execute("INSERT INTO requests (date, type, item, quantity, price_per_unit, total_value, user, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                       (datetime.datetime.now().isoformat(), trade_type, item, qty, price, qty * price, user, 'pending'))
+        self.db.commit()
+        return True
+
+    def add_user(self, username: str, password: str, role: str) -> bool:
+        cursor = self.db.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        if cursor.fetchone() or role not in ['admin', 'customer']:
+            return False
+        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", (username, password, role))
+        self.db.commit()
+        return True
+
+    def calculate_inventory(self, item: str, user: str) -> tuple[float, float, float]:
+        cursor = self.db.cursor()
+        cursor.execute("SELECT SUM(quantity) as qty, SUM(total_value) as cost FROM trades WHERE type = 'buy' AND item = ? AND user = ?", (item, user))
+        buy_row = cursor.fetchone()
+        cursor.execute("SELECT SUM(quantity) as qty FROM trades WHERE type = 'sell' AND item = ? AND user = ?", (item, user))
+        sell_row = cursor.fetchone()
+        qty = (buy_row['qty'] or 0) - (sell_row['qty'] or 0)
+        avg_price = (buy_row['cost'] or 0) / (buy_row['qty'] or 1)
+        cursor.execute("SELECT price FROM prices WHERE item = ? ORDER BY date DESC LIMIT 1", (item,))
+        current_price = cursor.fetchone()['price'] if cursor.fetchone() else avg_price
+        return qty, avg_price, qty * current_price
+
+    def get_user_buys(self, user: str) -> list[dict]:
+        cursor = self.db.cursor()
+        cursor.execute("SELECT date, item, quantity, price_per_unit, total_value FROM trades WHERE type = 'buy' AND user = ? ORDER BY date DESC", (user,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def calculate_profit_loss(self, user: str) -> float:
+        cursor = self.db.cursor()
+        role = cursor.execute("SELECT role FROM users WHERE username = ?", (user,)).fetchone()['role']
+        if role == 'admin':
+            cursor.execute("SELECT SUM(total_value) as val, type FROM trades GROUP BY type")
+        else:
+            cursor.execute("SELECT SUM(total_value) as val, type FROM trades WHERE user = ? GROUP BY type", (user,))
+        rows = cursor.fetchall()
+        sell_val = sum(r['val'] for r in rows if r['type'] == 'sell') or 0
+        buy_val = sum(r['val'] for r in rows if r['type'] == 'buy') or 0
+        return sell_val - buy_val
+
+@app.route('/')
+def index():
+    return redirect(url_for('login'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username, password = request.form['username'], request.form['password']
+        if manager.login(username, password):
+            session['user'] = username
+            role = manager.db.execute("SELECT role FROM users WHERE username = ?", (username,)).fetchone()['role']
+            return redirect(url_for('admin' if role == 'admin' else 'customer'))
+        return render_template('login.html', error="نام کاربری یا رمز عبور اشتباه است!")
+    return render_template('login.html')
+
+@app.route('/admin')
+def admin():
+    if session.get('user') and manager.db.execute("SELECT role FROM users WHERE username = ?", (session['user'],)).fetchone()['role'] == 'admin':
+        cursor = manager.db.cursor()
+        cursor.execute("SELECT item, active FROM active_items")
+        active_items = {r['item']: bool(r['active']) for r in cursor.fetchall()}
+        return render_template('admin.html', items=manager.ITEMS, active_items=active_items)
+    return redirect(url_for('login'))
+
+@app.route('/customer')
+def customer():
+    if session.get('user'):
+        cursor = manager.db.cursor()
+        cursor.execute("SELECT item, active FROM active_items")
+        active_items = {r['item']: bool(r['active']) for r in cursor.fetchall()}
+        return render_template('customer.html', items=manager.ITEMS, active_items=active_items)
+    return redirect(url_for('login'))
+
+@app.route('/trade/<action>/<trade_type>/<item>', methods=['GET', 'POST'])
+def trade(action: str, trade_type: str, item: str):
+    if not session.get('user'):
+        return redirect(url_for('login'))
+    role = manager.db.execute("SELECT role FROM users WHERE username = ?", (session['user'],)).fetchone()['role']
+    if role != 'admin' and action == 'trade':
+        return redirect(url_for('customer'))
+    if request.method == 'POST':
+        try:
+            qty = float(request.form['quantity'])
+            price = None if request.form.get('use_online') else float(request.form['price'])
+            success = manager.add_request(trade_type, item, qty, price, session['user']) if action == 'request' else manager.add_trade(trade_type, item, qty, price, session['user'])
+            return jsonify({'success': success, 'message': f"{'درخواست' if action == 'request' else 'معامله'} ثبت شد." if success else "خطا در ثبت!"})
+        except ValueError:
+            return jsonify({'success': False, 'message': "مقدار یا قیمت نامعتبر!"})
+    return render_template('form.html', action=action, trade_type=trade_type, item=manager.ITEMS[item])
+
+@app.route('/add_user', methods=['GET', 'POST'])
+def add_user():
+    if session.get('user') and manager.db.execute("SELECT role FROM users WHERE username = ?", (session['user'],)).fetchone()['role'] == 'admin':
+        if request.method == 'POST':
+            username, password, role = request.form['username'], request.form['password'], request.form['role']
+            success = manager.add_user(username, password, role)
+            return jsonify({'success': success, 'message': f"کاربر {username} اضافه شد." if success else "خطا در اضافه کردن!"})
+        return render_template('add_user.html')
+    return redirect(url_for('login'))
+
+@app.route('/manage_items')
+def manage_items():
+    if session.get('user') and manager.db.execute("SELECT role FROM users WHERE username = ?", (session['user'],)).fetchone()['role'] == 'admin':
+        cursor = manager.db.cursor()
+        cursor.execute("SELECT item, active FROM active_items")
+        active_items = {r['item']: bool(r['active']) for r in cursor.fetchall()}
+        return render_template('manage_items.html', items=manager.ITEMS, active_items=active_items)
+    return redirect(url_for('login'))
+
+@app.route('/toggle_item/<item>/<int:active>', methods=['GET'])
+def toggle_item(item: str, active: int):
+    if session.get('user') and manager.db.execute("SELECT role FROM users WHERE username = ?", (session['user'],)).fetchone()['role'] == 'admin':
+        manager.toggle_item(item, bool(active))
+        return jsonify({'success': True})
+    return jsonify({'success': False})
+
+@app.route('/requests')
+def requests():
+    if session.get('user') and manager.db.execute("SELECT role FROM users WHERE username = ?", (session['user'],)).fetchone()['role'] == 'admin':
+        cursor = manager.db.cursor()
+        cursor.execute("SELECT id, user, type, item, quantity, price_per_unit FROM requests WHERE status = 'pending'")
+        reqs = [{'id': r['id'], 'user': r['user'], 'type': r['type'], 'item': manager.ITEMS[r['item']], 'quantity': r['quantity'], 'price': r['price_per_unit']} for r in cursor.fetchall()]
+        return render_template('requests.html', requests=reqs)
+    return redirect(url_for('login'))
+
+@app.route('/request_action/<int:id>/<action>')
+def request_action(id: int, action: str):
+    if session.get('user') and manager.db.execute("SELECT role FROM users WHERE username = ?", (session['user'],)).fetchone()['role'] == 'admin':
+        cursor = manager.db.cursor()
+        cursor.execute("SELECT * FROM requests WHERE id = ?", (id,))
+        req = cursor.fetchone()
+        if req:
+            if action == 'approve':
+                manager.add_trade(req['type'], req['item'], req['quantity'], req['price_per_unit'], req['user'])
+            cursor.execute("DELETE FROM requests WHERE id = ?", (id,))
+            manager.db.commit()
+            return jsonify({'success': True, 'message': f"درخواست {'تأیید' if action == 'approve' else 'رد'} شد."})
+        return jsonify({'success': False, 'message': "درخواست یافت نشد!"})
+    return jsonify({'success': False})
+
+@app.route('/inventory')
+def inventory():
+    if not session.get('user'):
+        return redirect(url_for('login'))
+    user = session['user']
+    cursor = manager.db.cursor()
+    role = cursor.execute("SELECT role FROM users WHERE username = ?", (user,)).fetchone()['role']
+    users = [user] if role == 'customer' else [r['username'] for r in cursor.execute("SELECT username FROM users").fetchall()]
+    inventory = {u: {i: manager.calculate_inventory(i, u) for i in manager.ITEMS} for u in users}
+    buys = {u: manager.get_user_buys(u) for u in users}
+    return render_template('inventory.html', inventory=inventory, buys=buys, items=manager.ITEMS)
+
+@app.route('/profit_loss')
+def profit_loss():
+    if not session.get('user'):
+        return redirect(url_for('login'))
+    return jsonify({'profit_loss': f"{manager.calculate_profit_loss(session['user']):,.0f} تومان"})
+
+@app.route('/prices')
+def prices():
+    if session.get('user') and manager.db.execute("SELECT role FROM users WHERE username = ?", (session['user'],)).fetchone()['role'] == 'admin':
+        success = manager.fetch_current_prices()
+        cursor = manager.db.cursor()
+        cursor.execute("SELECT item, price FROM prices ORDER BY date DESC LIMIT 7")
+        prices = {r['item']: r['price'] for r in cursor.fetchall()}
+        return jsonify({'success': success, 'prices': {manager.ITEMS[k]: f"{v:,.0f}" for k, v in prices.items()}})
+    return jsonify({'success': False})
+
+@app.route('/price_history')
+def price_history():
+    cursor = manager.db.cursor()
+    cursor.execute("SELECT item, price, date FROM prices ORDER BY date DESC LIMIT 50")
+    history = {item: [] for item in manager.ITEMS}
+    for row in cursor.fetchall():
+        history[row['item']].append({'date': row['date'], 'price': row['price']})
+    return jsonify(history)
+
+@app.route('/logout')
+def logout():
+    session.pop('user', None)
+    return redirect(url_for('login'))
+
+if __name__ == "__main__":
+    manager = GoldTradeManager()
+    app.run(host='0.0.0.0', port=8080)
